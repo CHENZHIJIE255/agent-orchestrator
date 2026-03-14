@@ -1,0 +1,6 @@
+/target
+*.json
+!Cargo.toml
+/config
+/.env
+*.log

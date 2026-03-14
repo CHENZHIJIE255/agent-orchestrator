@@ -1,0 +1,1 @@
+// UI events module placeholder
