@@ -109,14 +109,24 @@ impl LLMClient {
             max_tokens: None,
         };
 
-        let response = self.client
-            .post(format!("{}/v1/chat/completions", base_url.trim_end_matches('/')))
+        let is_openrouter = base_url.contains("openrouter");
+        
+        let mut req = self.client
+            .post(format!("{}/chat/completions", base_url.trim_end_matches('/')))
             .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json");
+        
+        if is_openrouter {
+            req = req
+                .header("HTTP-Referer", "https://github.com/CHENZHIJIE255/agent-orchestrator")
+                .header("X-Title", "AgentOrchestrator");
+        }
+        
+        let response = req
             .json(&request)
             .send()
             .await
-            .map_err(|e| LLMError::Network(e.to_string()))?;
+            .map_err(|e| LLMError::Network(format!("{} - URL: {}/chat/completions", e, base_url)))?;
 
         let chat_response: ChatResponse = response
             .json()
@@ -243,22 +253,26 @@ impl std::fmt::Display for LLMError {
 impl std::error::Error for LLMError {}
 
 pub fn create_client_from_config(config: &crate::config::Config) -> Option<LLMClient> {
-    let model = config.get_default_model()?;
-    let api_key = config.resolve_api_key(model);
+    let provider = config.get_default_model()?;
+    let api_key = config.resolve_api_key(provider);
 
     if api_key.is_empty() {
         return None;
     }
 
-    let provider = match model.provider_type.as_str() {
+    let model_id = provider.models.first()
+        .map(|m| m.id.clone())
+        .unwrap_or_else(|| "gpt-4".to_string());
+
+    let provider = match provider.provider_type.as_str() {
         "openai" | "custom" => LLMProvider::OpenAI {
             api_key,
-            model: model.model.clone(),
-            base_url: model.base_url.clone().unwrap_or_else(|| "https://api.openai.com".to_string()),
+            model: model_id,
+            base_url: provider.base_url.clone(),
         },
         "anthropic" => LLMProvider::Anthropic {
             api_key,
-            model: model.model.clone(),
+            model: model_id,
         },
         _ => return None,
     };

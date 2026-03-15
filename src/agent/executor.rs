@@ -168,6 +168,7 @@ pub fn create_leaf_agent(prompt: &str) -> Agent {
 
 pub fn load_prompt_from_file(path: &str) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|_| {
+        eprintln!("Warning: Failed to load prompt from {}, using default", path);
         "You are an AI agent.".to_string()
     })
 }

@@ -49,6 +49,15 @@ pub struct TUI {
     logger: Arc<Logger>,
 }
 
+impl Clone for TUI {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+            logger: self.logger.clone(),
+        }
+    }
+}
+
 impl TUI {
     pub fn new(logger: Arc<Logger>) -> Self {
         Self {
@@ -82,12 +91,15 @@ impl TUI {
         let state = self.state.read();
         let project = state.current_project.as_deref().unwrap_or("No project");
         let status = format!("{:?}", state.task_status);
+        let message = &state.message;
 
         let header_text = Line::from(vec![
             Span::raw("AgentOrchestrator | "),
             Span::styled(project, Style::default().fg(Color::Cyan)),
             Span::raw(" | Status: "),
             Span::styled(status, Style::default().fg(Color::Green)),
+            Span::raw(" | "),
+            Span::styled(message, Style::default().fg(Color::Yellow)),
         ]);
 
         let block = Block::default()

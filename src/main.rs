@@ -13,7 +13,7 @@ use config::Config;
 use logger::Logger;
 use ui::TUI;
 use llm::{LLMClient, LLMProvider};
-use agent::{create_branch_agent, create_leaf_agent, AgentLevel as AgentLevelDecl, Agent};
+use agent::{create_branch_agent, load_prompt_from_file, AgentLevel as AgentLevelDecl, Agent};
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -43,21 +43,26 @@ impl App {
 
         std::fs::create_dir_all(&install_dir).ok();
 
-        let config = Config::load(Some(install_dir.clone()))?;
+        let config = Config::load()?;
         
-        let llm_client = if let Some(model) = config.get_default_model() {
-            let api_key = config.resolve_api_key(model);
+        let llm_client = if let Some(provider) = config.get_default_model() {
+            let api_key = config.resolve_api_key(provider);
             if api_key.is_empty() {
                 eprintln!("Warning: API key not configured. Please set your API key in config.json");
                 None
             } else {
+                let model_id = provider.models.first()
+                    .map(|m| m.id.clone())
+                    .unwrap_or_else(|| "gpt-4".to_string());
                 let provider = LLMProvider::OpenAI {
                     api_key,
-                    model: model.model.clone(),
+                    model: model_id,
+                    base_url: provider.base_url.clone(),
                 };
                 Some(Arc::new(LLMClient::new(provider)))
             }
         } else {
+            eprintln!("Warning: No default model configured");
             None
         };
 
@@ -192,35 +197,17 @@ impl App {
         let client = self.llm_client.clone().unwrap();
         let client_clone = (*client).clone();
         let logger = self.logger.clone();
-        let tui_message = self.tui.get_state();
+        let tui = self.tui.clone();
         
         let input_owned = input.to_string();
-        tui_message.write().message = format!("Processing: {}", input);
+        tui.set_message(&format!("Processing: {}", input));
 
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
-                let branch_prompt = r#"你是架构师 Agent，负责协调和组织多个子任务。
+                let branch_prompt = load_prompt_from_file("prompts/branch-agent.md");
 
-你的职责：
-1. 任务分解：将复杂需求拆分为可管理的小任务
-2. 模块划分：识别和定义系统模块及其职责
-3. 协调下级：管理叶子 Agent 的执行
-4. 方案评审：审核下级提交的方案和代码
-5. 记忆管理：更新和维护架构记忆
-
-当用户提出需求时，你需要：
-1. 分析需求
-2. 如果需要，创建项目结构
-3. 设计架构
-4. 分配任务给子 Agent
-
-记住：你不能直接写代码，只能分配任务。
-
-如果需要创建项目，请告诉用户使用 /newproject 命令。
-"#;
-
-                let mut agent = create_branch_agent(AgentLevelDecl::L0, branch_prompt);
+                let mut agent = create_branch_agent(AgentLevelDecl::L0, &branch_prompt);
                 agent = agent.with_llm(client_clone).with_context_limit(128000);
 
                 logger.info("Agent", "Calling LLM...");
@@ -228,9 +215,11 @@ impl App {
                 match agent.chat(&input_owned).await {
                     Ok(response) => {
                         logger.info("Agent", &response);
+                        tui.set_message(&response);
                     }
                     Err(e) => {
                         logger.error("Agent", &format!("LLM Error: {}", e));
+                        tui.set_message(&format!("Error: {}", e));
                     }
                 }
             });
@@ -278,6 +267,7 @@ fn main() -> anyhow::Result<()> {
             println!("Usage:");
             println!("  Orchestrator            Start TUI interface");
             println!("  Orchestrator -h        Show help");
+            println!("  Orchestrator test      Test LLM with '你好'");
             println!();
             println!("Commands in TUI:");
             println!("  /newproject             Create new project");
@@ -285,10 +275,46 @@ fn main() -> anyhow::Result<()> {
             println!("  !command                Execute terminal command");
             println!("  /exit                   Exit");
         }
+        "test" => {
+            test_llm()?;
+        }
         _ => {
             run_tui()?;
         }
     }
+    
+    Ok(())
+}
+
+fn test_llm() -> anyhow::Result<()> {
+    let app = App::new()?;
+    
+    if app.llm_client.is_none() {
+        println!("Error: LLM client not initialized");
+        return Ok(());
+    }
+    
+    let client = app.llm_client.unwrap();
+    let client_clone = (*client).clone();
+    
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let messages = vec![
+            crate::llm::ChatMessage {
+                role: "user".to_string(),
+                content: "你好".to_string(),
+            }
+        ];
+        
+        match client_clone.chat(messages).await {
+            Ok(response) => {
+                println!("AI Response: {}", response.content);
+            }
+            Err(e) => {
+                println!("Error: {}", e);
+            }
+        }
+    });
     
     Ok(())
 }

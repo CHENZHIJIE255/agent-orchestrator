@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::Path;
 use uuid::Uuid;
 
 fn evaluate_condition_static(condition: &EdgeCondition, _output: &serde_json::Value) -> bool {
@@ -98,6 +99,26 @@ impl WorkflowEngine {
         }
     }
 
+    pub fn load_workflows_from_dir(&mut self, dir_path: &str) -> std::io::Result<()> {
+        let path = Path::new(dir_path);
+        if !path.exists() {
+            return Ok(());
+        }
+
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().map(|e| e == "json").unwrap_or(false) {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(workflow) = serde_json::from_str::<Workflow>(&content) {
+                        self.register_workflow(workflow);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn register_workflow(&mut self, workflow: Workflow) {
         self.workflows.insert(workflow.id.clone(), workflow);
     }
@@ -112,7 +133,7 @@ impl WorkflowEngine {
 
     pub fn create_execution(&mut self, workflow_id: &str) -> Option<String> {
         let workflow = self.workflows.get(workflow_id)?;
-        
+
         let execution = WorkflowExecution {
             id: Uuid::new_v4().to_string(),
             workflow_id: workflow_id.to_string(),
@@ -123,7 +144,7 @@ impl WorkflowEngine {
             started_at: chrono::Utc::now().timestamp(),
             finished_at: None,
         };
-        
+
         let id = execution.id.clone();
         self.executions.insert(id.clone(), execution);
         Some(id)
@@ -131,11 +152,11 @@ impl WorkflowEngine {
 
     pub fn start_execution(&mut self, execution_id: &str) -> Option<&mut WorkflowExecution> {
         let execution = self.executions.get_mut(execution_id)?;
-        
+
         if execution.status == WorkflowStatus::Pending {
             execution.status = WorkflowStatus::Running;
         }
-        
+
         Some(execution)
     }
 
@@ -146,24 +167,25 @@ impl WorkflowEngine {
         output: serde_json::Value,
     ) -> Option<String> {
         let execution = self.executions.get_mut(execution_id)?;
-        
+
         let result = NodeResult {
             node_id: node_id.to_string(),
             output: Some(output.clone()),
             error: None,
             execution_time_ms: 0,
         };
-        
+
         execution.results.push(result);
-        
+
         let workflow_id = execution.workflow_id.clone();
         let workflow = self.workflows.get(&workflow_id)?.clone();
-        
-        let next_edges: Vec<&WorkflowEdge> = workflow.edges
+
+        let next_edges: Vec<&WorkflowEdge> = workflow
+            .edges
             .iter()
             .filter(|e| e.from == node_id)
             .collect();
-        
+
         let next_node = next_edges.iter().find_map(|edge| {
             if let Some(ref condition) = edge.condition {
                 if evaluate_condition_static(&condition, &output) {
@@ -175,7 +197,7 @@ impl WorkflowEngine {
                 Some(edge.to.clone())
             }
         });
-        
+
         if let Some(node) = next_node {
             execution.current_node = Some(node.clone());
             Some(node)
@@ -205,6 +227,10 @@ impl WorkflowEngine {
     }
 
     pub fn create_default_workflows(&mut self) {
+        if self.load_workflows_from_dir("workflows").is_ok() && !self.workflows.is_empty() {
+            return;
+        }
+
         let simple_workflow = Workflow {
             id: "simple-task".to_string(),
             name: "简单任务".to_string(),

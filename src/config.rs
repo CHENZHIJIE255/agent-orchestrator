@@ -6,18 +6,15 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub models: ModelsConfig,
-    pub context: ContextConfig,
     pub agents: AgentsConfig,
-    pub opencode: OpenCodeConfig,
     pub language: String,
-    #[cfg(windows)]
-    pub install_dir: PathBuf,
-    #[cfg(not(windows))]
+    #[serde(default)]
     pub install_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelsConfig {
+    #[serde(alias = "default_model")]
     pub default: String,
     pub providers: HashMap<String, ModelProvider>,
 }
@@ -26,25 +23,29 @@ pub struct ModelsConfig {
 pub struct ModelProvider {
     #[serde(rename = "type")]
     pub provider_type: String,
-    pub model: String,
-    pub api_key_env: String,
-    pub context_limit: u32,
-    pub base_url: Option<String>,
+    #[serde(alias = "baseUrl")]
+    pub base_url: String,
+    #[serde(alias = "apiKey")]
+    pub api_key: String,
+    pub api: Option<String>,
+    pub models: Vec<ModelInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContextConfig {
-    pub warning_threshold: f64,
+pub struct ModelInfo {
+    pub id: String,
+    #[serde(alias = "contextWindow")]
+    pub context_window: u32,
+    #[serde(alias = "maxTokens")]
+    pub max_tokens: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentsConfig {
+    #[serde(alias = "pool_size")]
     pub pool_size: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenCodeConfig {
-    pub path: String,
+    #[serde(alias = "max_concurrent")]
+    pub max_concurrent: Option<usize>,
 }
 
 fn get_default_install_dir() -> PathBuf {
@@ -53,8 +54,8 @@ fn get_default_install_dir() -> PathBuf {
         .join("agent-orchestrator")
 }
 
-fn get_openclaw_config_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".openclaw/openclaw.json"))
+fn get_default_config_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|h| h.join("orchestrator/config.json"))
 }
 
 impl Default for Config {
@@ -65,17 +66,12 @@ impl Default for Config {
 
         Self {
             models: ModelsConfig {
-                default: "openai".to_string(),
+                default: "minimax-cn".to_string(),
                 providers,
-            },
-            context: ContextConfig {
-                warning_threshold: 0.7,
             },
             agents: AgentsConfig {
                 pool_size: 25,
-            },
-            opencode: OpenCodeConfig {
-                path: "opencode".to_string(),
+                max_concurrent: None,
             },
             language: "en".to_string(),
             install_dir,
@@ -85,97 +81,34 @@ impl Default for Config {
 
 impl Config {
     pub fn load() -> anyhow::Result<Self> {
+        if let Some(config_path) = get_default_config_path() {
+            if config_path.exists() {
+                let content = fs::read_to_string(&config_path)?;
+                let mut config: Config = serde_json::from_str(&content)?;
+                config.install_dir = get_default_install_dir();
+                return Ok(config);
+            }
+        }
+
         let install_dir = get_default_install_dir();
-        
         if !install_dir.exists() {
             fs::create_dir_all(&install_dir)?;
         }
 
-        let config_path = install_dir.join("config.json");
+        let default_config = Config::default();
+        let content = serde_json::to_string_pretty(&default_config)?;
+        fs::write(install_dir.join("config.json"), content)?;
         
-        let mut config = if config_path.exists() {
-            let content = fs::read_to_string(&config_path)?;
-            let mut c: Config = serde_json::from_str(&content)?;
-            c.install_dir = install_dir;
-            c
-        } else {
-            let default_config = Config::default();
-            let content = serde_json::to_string_pretty(&default_config)?;
-            fs::write(&config_path, content)?;
-            default_config
-        };
-
-        if let Some(openclaw_path) = get_openclaw_config_path() {
-            if openclaw_path.exists() {
-                if let Ok(openclaw_config) = fs::read_to_string(&openclaw_path) {
-                    if let Ok(openclaw) = serde_json::from_str::<serde_json::Value>(&openclaw_config) {
-                        config = Self::merge_openclaw_config(config, &openclaw);
-                    }
-                }
-            }
-        }
-
-        Ok(config)
-    }
-
-    fn merge_openclaw_config(mut config: Config, openclaw: &serde_json::Value) -> Config {
-        if let Some(models) = openclaw.get("models") {
-            if let Some(default) = models.get("default_model")
-                .or_else(|| models.get("default"))
-                .and_then(|v| v.as_str())
-            {
-                config.models.default = default.to_string();
-            }
-
-            if let Some(providers) = models.as_object() {
-                for (name, value) in providers {
-                    if let Some(provider_type) = value.get("type").and_then(|v| v.as_str()) {
-                        let model = value.get("model")
-                            .or_else(|| value.get("name"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("default")
-                            .to_string();
-                        
-                        let api_key_env = value.get("api_key")
-                            .and_then(|v| v.as_str())
-                            .map(|s| {
-                                if s.starts_with("env:") {
-                                    s.to_string()
-                                } else {
-                                    format!("env:{}", s)
-                                }
-                            })
-                            .unwrap_or_else(|| "env:OPENAI_API_KEY".to_string());
-
-                        let base_url = value.get("base_url")
-                            .or_else(|| value.get("endpoint"))
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-
-                        let context_limit = value.get("context_limit")
-                            .or_else(|| value.get("max_tokens"))
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(128000) as u32;
-
-                        config.models.providers.insert(
-                            name.clone(),
-                            ModelProvider {
-                                provider_type: provider_type.to_string(),
-                                model,
-                                api_key_env,
-                                context_limit,
-                                base_url,
-                            },
-                        );
-                    }
-                }
-            }
-        }
-
-        config
+        Ok(default_config)
     }
 
     pub fn get_model(&self, name: &str) -> Option<&ModelProvider> {
+        if name.contains('/') {
+            let parts: Vec<&str> = name.split('/').collect();
+            if parts.len() == 2 {
+                return self.models.providers.get(parts[0]);
+            }
+        }
         self.models.providers.get(name)
     }
 
@@ -184,11 +117,11 @@ impl Config {
     }
 
     pub fn resolve_api_key(&self, provider: &ModelProvider) -> String {
-        if provider.api_key_env.starts_with("env:") {
-            let env_var = provider.api_key_env.strip_prefix("env:").unwrap();
+        if provider.api_key.starts_with("env:") {
+            let env_var = provider.api_key.strip_prefix("env:").unwrap();
             std::env::var(env_var).unwrap_or_default()
         } else {
-            std::env::var(&provider.api_key_env).unwrap_or_default()
+            provider.api_key.clone()
         }
     }
 }
