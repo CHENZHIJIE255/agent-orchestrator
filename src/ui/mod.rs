@@ -1,5 +1,6 @@
 mod events;
 
+use parking_lot::RwLock;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
@@ -8,9 +9,9 @@ use ratatui::{
     Frame,
 };
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 use crate::agent::TaskStatus;
+use crate::i18n;
 use crate::logger::{LogEntry, Logger};
 
 pub struct TUIState {
@@ -39,7 +40,7 @@ impl Default for TUIState {
             error_logs: Vec::new(),
             pending_approvals: Vec::new(),
             input_buffer: String::new(),
-            message: String::from("Welcome! Use /newproject to create a project or /projectname to open a project."),
+            message: String::from(i18n::t("app.welcome")),
         }
     }
 }
@@ -102,9 +103,7 @@ impl TUI {
             Span::styled(message, Style::default().fg(Color::Yellow)),
         ]);
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Status ");
+        let block = Block::default().borders(Borders::ALL).title(" Status ");
 
         let paragraph = Paragraph::new(header_text)
             .block(block)
@@ -125,8 +124,9 @@ impl TUI {
 
     fn render_log_panel(&self, f: &mut Frame, area: ratatui::layout::Rect) {
         let state = self.state.read();
-        
-        let items: Vec<ListItem> = state.logs
+
+        let items: Vec<ListItem> = state
+            .logs
             .iter()
             .rev()
             .take(50)
@@ -137,28 +137,32 @@ impl TUI {
                     crate::logger::LogLevel::Error => Color::Red,
                     crate::logger::LogLevel::Debug => Color::DarkGray,
                 };
-                
+
                 let content = format!(
                     "[{}] [{}] {}",
                     log.timestamp.format("%H:%M:%S"),
                     log.agent,
                     log.message
                 );
-                
+
                 ListItem::new(Span::styled(content, Style::default().fg(color)))
             })
             .collect();
 
-        let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title(" Logs "));
+        let list = List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(i18n::t("logs.title")),
+        );
 
         f.render_widget(list, area);
     }
 
     fn render_alert_panel(&self, f: &mut Frame, area: ratatui::layout::Rect) {
         let state = self.state.read();
-        
-        let items: Vec<ListItem> = state.error_logs
+
+        let items: Vec<ListItem> = state
+            .error_logs
             .iter()
             .rev()
             .take(20)
@@ -168,23 +172,26 @@ impl TUI {
                     crate::logger::LogLevel::Error => ("❌", Color::Red),
                     _ => ("ℹ️", Color::White),
                 };
-                
+
                 let content = format!("{} [{}] {}", prefix, log.agent, log.message);
                 ListItem::new(Span::styled(content, Style::default().fg(color)))
             })
             .collect();
 
-        let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title(" Alerts (P0-P3) "));
+        let list = List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(i18n::t("alerts.title")),
+        );
 
         f.render_widget(list, area);
     }
 
     fn render_approval_panel(&self, f: &mut Frame, area: ratatui::layout::Rect) {
         let state = self.state.read();
-        
+
         let approval_text = if state.pending_approvals.is_empty() {
-            Line::from(" No pending approvals ")
+            Line::from(i18n::t("approval.no_pending"))
         } else {
             let approval = &state.pending_approvals[0];
             Line::from(vec![
@@ -196,9 +203,7 @@ impl TUI {
             ])
         };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Approvals ");
+        let block = Block::default().borders(Borders::ALL).title(" Approvals ");
 
         let paragraph = Paragraph::new(approval_text)
             .block(block)
@@ -209,12 +214,10 @@ impl TUI {
 
     fn render_input_panel(&self, f: &mut Frame, area: ratatui::layout::Rect) {
         let state = self.state.read();
-        
+
         let input_text = format!("> {}", state.input_buffer);
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Input ");
+        let block = Block::default().borders(Borders::ALL).title(" Input ");
 
         let paragraph = Paragraph::new(input_text)
             .block(block)

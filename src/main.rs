@@ -8,12 +8,14 @@ mod skill;
 mod hook;
 mod mcp;
 mod workflow;
+mod i18n;
 
 use config::Config;
 use logger::Logger;
 use ui::TUI;
 use llm::{LLMClient, LLMProvider};
 use agent::{create_branch_agent, load_prompt_from_file, AgentLevel as AgentLevelDecl, Agent};
+use i18n::{t, t_with_args};
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -45,10 +47,12 @@ impl App {
 
         let config = Config::load()?;
         
+        i18n::init(&config.language);
+        
         let llm_client = if let Some(provider) = config.get_default_model() {
             let api_key = config.resolve_api_key(provider);
             if api_key.is_empty() {
-                eprintln!("Warning: API key not configured. Please set your API key in config.json");
+                eprintln!("Warning: {}", t("errors.api_key_not_configured"));
                 None
             } else {
                 let model_id = provider.models.first()
@@ -62,16 +66,16 @@ impl App {
                 Some(Arc::new(LLMClient::new(provider)))
             }
         } else {
-            eprintln!("Warning: No default model configured");
+            eprintln!("Warning: {}", t("errors.no_default_model"));
             None
         };
 
         if llm_client.is_some() {
-            println!("LLM client initialized successfully!");
+            println!("{}", t("success.llm_initialized"));
         }
 
         let logger = Arc::new(logger::init_logger(&install_dir));
-        logger.info("System", "AgentOrchestrator started");
+        logger.info("System", &t("system.started"));
 
         let tui = TUI::new(logger.clone());
 
@@ -104,13 +108,23 @@ impl App {
     fn handle_software_command(&mut self, input: &str) -> bool {
         match input {
             "/newproject" => {
-                self.logger.info("Command", "Creating new project...");
-                self.tui.set_message("Enter project name to create:");
+                self.logger.info("Command", &t("project.creating"));
+                self.tui.set_message(&t("input.enter_project_name"));
                 true
             }
             "/exit" | "/quit" => {
-                self.logger.info("System", "Shutting down...");
+                self.logger.info("System", &t("system.shutting_down"));
                 false
+            }
+            cmd if cmd.starts_with("/lang ") => {
+                let lang = cmd.trim_start_matches("/lang ").trim();
+                if i18n::available_locales().contains(&lang) {
+                    i18n::set_locale(lang);
+                    self.tui.set_message(&format!("Language changed to: {}", lang));
+                } else {
+                    self.tui.set_message(&format!("Available locales: {}", i18n::available_locales().join(", ")));
+                }
+                true
             }
             _ => {
                 let path = input.trim_start_matches('/');
@@ -130,15 +144,15 @@ impl App {
     fn is_waiting_for_project_name(&self) -> bool {
         let state = self.tui.get_state();
         let message = state.read().message.clone();
-        message.contains("Enter project name")
+        message.contains(&t("input.enter_project_name"))
     }
 
     fn create_project(&mut self, project_name: &str) {
         let project_path = self.config.install_dir.join(project_name);
         
         if project_path.exists() {
-            self.logger.error("Project", &format!("Project already exists: {}", project_name));
-            self.tui.set_message(&format!("Error: Project '{}' already exists", project_name));
+            self.logger.error("Project", &t_with_args("errors.project_already_exists", &[("0", project_name)]));
+            self.tui.set_message(&t_with_args("errors.project_already_exists", &[("0", project_name)]));
             return;
         }
 
@@ -148,8 +162,8 @@ impl App {
         std::fs::create_dir_all(project_path.join("memory/history")).ok();
         std::fs::create_dir_all(project_path.join("logs")).ok();
 
-        self.logger.info("Project", &format!("Created project: {}", project_name));
-        self.tui.set_message(&format!("Created project: {}", project_name));
+        self.logger.info("Project", &t_with_args("project.created", &[("0", project_name)]));
+        self.tui.set_message(&t_with_args("project.created", &[("0", project_name)]));
         
         self.memory = Some(memory::ProjectMemory::new(
             project_name.to_string(),
@@ -160,7 +174,7 @@ impl App {
     fn handle_terminal_command(&mut self, input: &str) -> bool {
         let cmd = input.trim_start_matches('!');
         
-        self.logger.info("Terminal", &format!("Executing: {}", cmd));
+        self.logger.info("Terminal", &t_with_args("terminal.executing", &[("0", cmd)]));
         
         match std::process::Command::new("sh")
             .arg("-c")
@@ -179,7 +193,7 @@ impl App {
                 }
             }
             Err(e) => {
-                self.logger.error("Terminal", &format!("Command failed: {}", e));
+                self.logger.error("Terminal", &t_with_args("errors.command_failed", &[("0", &e.to_string())]));
             }
         }
         
@@ -190,7 +204,7 @@ impl App {
         self.logger.info("User", input);
         
         if self.llm_client.is_none() {
-            self.tui.set_message("Error: LLM not configured. Please set API key in config.json");
+            self.tui.set_message(&t("errors.api_key_not_configured"));
             return true;
         }
 
@@ -200,7 +214,7 @@ impl App {
         let tui = self.tui.clone();
         
         let input_owned = input.to_string();
-        tui.set_message(&format!("Processing: {}", input));
+        tui.set_message(&t_with_args("success.processing", &[("0", input)]));
 
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
@@ -210,7 +224,7 @@ impl App {
                 let mut agent = create_branch_agent(AgentLevelDecl::L0, &branch_prompt);
                 agent = agent.with_llm(client_clone).with_context_limit(128000);
 
-                logger.info("Agent", "Calling LLM...");
+                logger.info("Agent", &t("agent.calling"));
 
                 match agent.chat(&input_owned).await {
                     Ok(response) => {
@@ -218,8 +232,8 @@ impl App {
                         tui.set_message(&response);
                     }
                     Err(e) => {
-                        logger.error("Agent", &format!("LLM Error: {}", e));
-                        tui.set_message(&format!("Error: {}", e));
+                        logger.error("Agent", &t_with_args("errors.llm_error", &[("0", &e.to_string())]));
+                        tui.set_message(&t_with_args("errors.llm_error", &[("0", &e.to_string())]));
                     }
                 }
             });
@@ -232,8 +246,8 @@ impl App {
         let project_path = self.config.install_dir.join(project_name);
         
         if !project_path.exists() {
-            self.logger.error("Project", &format!("Project not found: {}", project_name));
-            self.tui.set_message(&format!("Error: Project '{}' not found", project_name));
+            self.logger.error("Project", &t_with_args("errors.project_not_found", &[("0", project_name)]));
+            self.tui.set_message(&t_with_args("errors.project_not_found", &[("0", project_name)]));
             return;
         }
 
@@ -241,13 +255,13 @@ impl App {
         
         if let Some(m) = mem {
             self.memory = Some(m);
-            self.logger.info("Project", &format!("Opened project: {}", project_name));
-            self.tui.set_message(&format!("Opened project: {}", project_name));
+            self.logger.info("Project", &t_with_args("project.opened", &[("0", project_name)]));
+            self.tui.set_message(&t_with_args("project.opened", &[("0", project_name)]));
         } else {
             let m = memory::ProjectMemory::new(project_name.to_string(), self.config.install_dir.clone());
             self.memory = Some(m);
-            self.logger.info("Project", &format!("Created project: {}", project_name));
-            self.tui.set_message(&format!("Created project: {}", project_name));
+            self.logger.info("Project", &t_with_args("project.created", &[("0", project_name)]));
+            self.tui.set_message(&t_with_args("project.created", &[("0", project_name)]));
         }
     }
 }
@@ -262,18 +276,18 @@ fn main() -> anyhow::Result<()> {
             run_tui()?;
         }
         "-h" | "--help" | "help" => {
-            println!("Agent Orchestrator");
+            println!("{}", t("help.title"));
             println!();
-            println!("Usage:");
-            println!("  Orchestrator            Start TUI interface");
-            println!("  Orchestrator -h        Show help");
-            println!("  Orchestrator test      Test LLM with '你好'");
+            println!("{}", t("help.usage"));
+            println!("  {}", t("help.start_tui"));
+            println!("  {}", t("help.show_help"));
+            println!("  {}", t("help.test_llm"));
             println!();
-            println!("Commands in TUI:");
-            println!("  /newproject             Create new project");
-            println!("  /projectname            Open project");
-            println!("  !command                Execute terminal command");
-            println!("  /exit                   Exit");
+            println!("{}", t("help.commands_title"));
+            println!("  {}", t("help.cmd_newproject"));
+            println!("  {}", t("help.cmd_openproject"));
+            println!("  {}", t("help.cmd_terminal"));
+            println!("  {}", t("help.cmd_exit"));
         }
         "test" => {
             test_llm()?;
@@ -290,7 +304,7 @@ fn test_llm() -> anyhow::Result<()> {
     let app = App::new()?;
     
     if app.llm_client.is_none() {
-        println!("Error: LLM client not initialized");
+        println!("{}", t("errors.llm_client_not_initialized"));
         return Ok(());
     }
     
