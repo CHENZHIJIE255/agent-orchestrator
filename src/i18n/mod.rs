@@ -1,6 +1,5 @@
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::env;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -24,26 +23,16 @@ impl I18n {
     }
 
     fn load_locale(locale: &str) -> JsonMap {
-        let possible_paths = vec![
-            Path::new("locales").join(format!("{}.json", locale)),
-            Path::new(
-                env::current_exe()
-                    .unwrap_or_default()
-                    .parent()
-                    .unwrap_or(Path::new(".")),
-            )
-            .join("locales")
-            .join(format!("{}.json", locale)),
-            Path::new("/home/administrator/dev/AiTools/agent-orchestrator/locales")
-                .join(format!("{}.json", locale)),
-        ];
+        let install_dir = dirs::config_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("agent-orchestrator");
 
-        for path in possible_paths {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(obj) = value.as_object() {
-                        return obj.clone();
-                    }
+        let path = install_dir.join("locales").join(format!("{}.json", locale));
+
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(obj) = value.as_object() {
+                    return obj.clone();
                 }
             }
         }

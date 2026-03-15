@@ -6,6 +6,10 @@ description = "Agent orchestration framework with TUI interface"
 license = "MIT"
 authors = ["AgentOrchestrator Team"]
 
+[[bin]]
+name = "orchestrator"
+path = "src/main.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 ratatui = "0.28"
