@@ -381,6 +381,9 @@ fn run_tui() -> anyhow::Result<()> {
                         _ => {}
                     }
                 }
+                crossterm::event::Event::Resize(_, _) => {
+                    terminal.clear()?;
+                }
                 _ => {}
             }
         }

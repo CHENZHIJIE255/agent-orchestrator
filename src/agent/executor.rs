@@ -167,8 +167,21 @@ pub fn create_leaf_agent(prompt: &str) -> Agent {
 }
 
 pub fn load_prompt_from_file(path: &str) -> String {
-    std::fs::read_to_string(path).unwrap_or_else(|_| {
-        eprintln!("Warning: Failed to load prompt from {}, using default", path);
-        "You are an AI agent.".to_string()
-    })
+    let install_dir = dirs::config_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("agent-orchestrator");
+    
+    let possible_paths = vec![
+        std::path::PathBuf::from(path),
+        install_dir.join("prompts").join(path),
+    ];
+
+    for p in &possible_paths {
+        if let Ok(content) = std::fs::read_to_string(p) {
+            return content;
+        }
+    }
+    
+    eprintln!("Warning: Failed to load prompt from {}, using default", path);
+    "You are an AI agent.".to_string()
 }

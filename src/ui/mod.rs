@@ -77,7 +77,7 @@ impl TUI {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
+                Constraint::Length(4),
                 Constraint::Min(0),
                 Constraint::Length(3),
                 Constraint::Length(3),
@@ -94,15 +94,19 @@ impl TUI {
         let state = self.state.read();
         let project = state.current_project.as_deref().unwrap_or("No project");
         let status = format!("{:?}", state.task_status);
-        let message = &state.message;
+
+        let max_width = area.width.saturating_sub(10) as usize;
+        let message = if state.message.len() > max_width {
+            &state.message[..max_width]
+        } else {
+            state.message.as_str()
+        };
 
         let header_text = Line::from(vec![
             Span::raw("AgentOrchestrator | "),
             Span::styled(project, Style::default().fg(Color::Cyan)),
             Span::raw(" | Status: "),
             Span::styled(status, Style::default().fg(Color::Green)),
-            Span::raw(" | "),
-            Span::styled(message, Style::default().fg(Color::Yellow)),
         ]);
 
         let block = Block::default().borders(Borders::ALL).title(" Status ");
@@ -112,6 +116,18 @@ impl TUI {
             .style(Style::default().fg(Color::White));
 
         f.render_widget(paragraph, area);
+
+        if !message.is_empty() {
+            let msg_area = ratatui::layout::Rect::new(
+                area.x + 1,
+                area.y + 1,
+                area.x + area.width - 2,
+                area.y + 2,
+            );
+            let msg_text = Line::from(Span::styled(message, Style::default().fg(Color::Yellow)));
+            let msg_para = Paragraph::new(msg_text);
+            f.render_widget(msg_para, msg_area);
+        }
     }
 
     fn render_main_panels(&self, f: &mut Frame, area: ratatui::layout::Rect) {
