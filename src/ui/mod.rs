@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation},
+    widgets::{List, ListItem, Paragraph},
     Frame,
 };
 use std::sync::Arc;
@@ -21,14 +21,8 @@ pub struct TUIState {
     pub error_logs: Vec<LogEntry>,
     pub pending_approvals: Vec<ApprovalRequest>,
     pub input_buffer: String,
-    pub message: String,
-}
-
-pub struct ApprovalRequest {
-    pub id: String,
-    pub agent: String,
-    pub description: String,
-    pub timestamp: i64,
+    pub messages: Vec<ChatMessage>,
+    pub waiting_for_project_name: bool,
 }
 
 impl Default for TUIState {
@@ -40,9 +34,23 @@ impl Default for TUIState {
             error_logs: Vec::new(),
             pending_approvals: Vec::new(),
             input_buffer: String::new(),
-            message: String::new(),
+            messages: Vec::new(),
+            waiting_for_project_name: false,
         }
     }
+}
+
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+    pub timestamp: String,
+}
+
+pub struct ApprovalRequest {
+    pub id: String,
+    pub agent: String,
+    pub description: String,
+    pub timestamp: i64,
 }
 
 pub struct TUI {
@@ -65,7 +73,6 @@ impl TUI {
             state: Arc::new(RwLock::new(TUIState::default())),
             logger,
         };
-        tui.set_message(&i18n::t("app.welcome"));
         tui
     }
 
@@ -77,29 +84,24 @@ impl TUI {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
+                Constraint::Length(1),
                 Constraint::Min(0),
-                Constraint::Length(3),
+                Constraint::Length(1),
             ])
             .split(f.area());
 
         self.render_header(f, chunks[0]);
-        self.render_logs(f, chunks[1]);
+        self.render_chat(f, chunks[1]);
         self.render_input(f, chunks[2]);
     }
 
     fn render_header(&self, f: &mut Frame, area: ratatui::layout::Rect) {
         let state = self.state.read();
         let project = state.current_project.as_deref().unwrap_or("No project");
-        let status = format!("{:?}", state.task_status);
 
         let text = Line::from(vec![
-            Span::raw("["),
-            Span::styled("Agent", Style::default().fg(Color::Cyan)),
-            Span::raw("] "),
+            Span::styled("Agent | ", Style::default().fg(Color::Cyan)),
             Span::styled(project, Style::default().fg(Color::Green)),
-            Span::raw(" | "),
-            Span::styled(status, Style::default().fg(Color::Yellow)),
         ]);
 
         f.render_widget(
@@ -108,10 +110,29 @@ impl TUI {
         );
     }
 
-    fn render_logs(&self, f: &mut Frame, area: ratatui::layout::Rect) {
+    fn render_chat(&self, f: &mut Frame, area: ratatui::layout::Rect) {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(area);
+
         let state = self.state.read();
 
-        let log_items: Vec<ListItem> = state
+        let user_items: Vec<ListItem> = state
+            .messages
+            .iter()
+            .filter(|m| m.role == "user")
+            .map(|m| ListItem::new(Span::styled(&m.content, Style::default().fg(Color::White))))
+            .collect();
+
+        let ai_items: Vec<ListItem> = state
+            .messages
+            .iter()
+            .filter(|m| m.role == "ai")
+            .map(|m| ListItem::new(Span::styled(&m.content, Style::default().fg(Color::White))))
+            .collect();
+
+        let logs: Vec<ListItem> = state
             .logs
             .iter()
             .rev()
@@ -123,30 +144,16 @@ impl TUI {
                     crate::logger::LogLevel::Error => Color::Red,
                     crate::logger::LogLevel::Debug => Color::DarkGray,
                 };
-
-                let content = format!(
-                    "[{}] {}: {}",
-                    log.timestamp.format("%H:%M:%S"),
-                    log.agent,
-                    log.message
-                );
-
-                ListItem::new(Span::styled(content, Style::default().fg(color)))
+                ListItem::new(Span::styled(&log.message, Style::default().fg(color)))
             })
             .collect();
 
-        let list = List::new(log_items);
-        f.render_widget(list, area);
+        let left_items: Vec<ListItem> = user_items.into_iter().chain(ai_items).collect();
+        let left_list = List::new(left_items);
+        f.render_widget(left_list, chunks[0]);
 
-        if !state.message.is_empty() {
-            let msg_y = area.y + area.height.saturating_sub(1);
-            let msg_area = ratatui::layout::Rect::new(area.x, msg_y, area.width, 1);
-            let msg_text = Line::from(vec![
-                Span::styled("> ", Style::default().fg(Color::Cyan)),
-                Span::styled(&state.message, Style::default().fg(Color::White)),
-            ]);
-            f.render_widget(Paragraph::new(msg_text), msg_area);
-        }
+        let right_list = List::new(logs);
+        f.render_widget(right_list, chunks[1]);
     }
 
     fn render_input(&self, f: &mut Frame, area: ratatui::layout::Rect) {
@@ -164,6 +171,31 @@ impl TUI {
 
     pub fn set_message(&self, message: &str) {
         let mut state = self.state.write();
-        state.message = message.to_string();
+        let now = chrono::Local::now().format("%H:%M").to_string();
+        state.messages.push(ChatMessage {
+            role: "ai".to_string(),
+            content: message.to_string(),
+            timestamp: now,
+        });
+    }
+
+    pub fn set_waiting_for_project_name(&self, waiting: bool) {
+        let mut state = self.state.write();
+        state.waiting_for_project_name = waiting;
+    }
+
+    pub fn is_waiting_for_project_name(&self) -> bool {
+        let state = self.state.read();
+        state.waiting_for_project_name
+    }
+
+    pub fn add_user_message(&self, message: &str) {
+        let mut state = self.state.write();
+        let now = chrono::Local::now().format("%H:%M").to_string();
+        state.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: message.to_string(),
+            timestamp: now,
+        });
     }
 }

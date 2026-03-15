@@ -110,6 +110,7 @@ impl App {
             "/newproject" => {
                 self.logger.info("Command", &t("project.creating"));
                 self.tui.set_message(&t("input.enter_project_name"));
+                self.tui.set_waiting_for_project_name(true);
                 true
             }
             "/exit" | "/quit" => {
@@ -142,9 +143,7 @@ impl App {
     }
 
     fn is_waiting_for_project_name(&self) -> bool {
-        let state = self.tui.get_state();
-        let message = state.read().message.clone();
-        message.contains(&t("input.enter_project_name"))
+        self.tui.is_waiting_for_project_name()
     }
 
     fn create_project(&mut self, project_name: &str) {
@@ -164,6 +163,7 @@ impl App {
 
         self.logger.info("Project", &t_with_args("project.created", &[("0", project_name)]));
         self.tui.set_message(&t_with_args("project.created", &[("0", project_name)]));
+        self.tui.set_waiting_for_project_name(false);
         
         self.memory = Some(memory::ProjectMemory::new(
             project_name.to_string(),
@@ -202,6 +202,7 @@ impl App {
 
     fn handle_user_input(&mut self, input: &str) -> bool {
         self.logger.info("User", input);
+        self.tui.add_user_message(input);
         
         if self.llm_client.is_none() {
             self.tui.set_message(&t("errors.api_key_not_configured"));
@@ -214,7 +215,6 @@ impl App {
         let tui = self.tui.clone();
         
         let input_owned = input.to_string();
-        tui.set_message(&t_with_args("success.processing", &[("0", input)]));
 
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
