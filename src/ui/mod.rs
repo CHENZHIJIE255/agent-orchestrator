@@ -40,7 +40,7 @@ impl Default for TUIState {
             error_logs: Vec::new(),
             pending_approvals: Vec::new(),
             input_buffer: String::new(),
-            message: String::from(i18n::t("app.welcome")),
+            message: String::new(),
         }
     }
 }
@@ -61,10 +61,12 @@ impl Clone for TUI {
 
 impl TUI {
     pub fn new(logger: Arc<Logger>) -> Self {
-        Self {
+        let tui = Self {
             state: Arc::new(RwLock::new(TUIState::default())),
             logger,
-        }
+        };
+        tui.set_message(&i18n::t("app.welcome"));
+        tui
     }
 
     pub fn get_state(&self) -> Arc<RwLock<TUIState>> {
