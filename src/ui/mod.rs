@@ -73,6 +73,7 @@ impl TUI {
             state: Arc::new(RwLock::new(TUIState::default())),
             logger,
         };
+        tui.set_message(&i18n::t("app.welcome"));
         tui
     }
 
