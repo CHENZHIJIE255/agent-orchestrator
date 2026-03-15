@@ -15,28 +15,39 @@ pub struct Skill {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum SkillCategory {
+    Builtin(BuiltinCategory),
+    Custom(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BuiltinCategory {
     CodeGeneration,
     CodeReview,
     Testing,
     Documentation,
     Deployment,
     Analysis,
-    Custom(String),
+}
+
+impl SkillCategory {
+    pub fn as_str(&self) -> &str {
+        match self {
+            SkillCategory::Builtin(BuiltinCategory::CodeGeneration) => "CodeGeneration",
+            SkillCategory::Builtin(BuiltinCategory::CodeReview) => "CodeReview",
+            SkillCategory::Builtin(BuiltinCategory::Testing) => "Testing",
+            SkillCategory::Builtin(BuiltinCategory::Documentation) => "Documentation",
+            SkillCategory::Builtin(BuiltinCategory::Deployment) => "Deployment",
+            SkillCategory::Builtin(BuiltinCategory::Analysis) => "Analysis",
+            SkillCategory::Custom(s) => s.as_str(),
+        }
+    }
 }
 
 impl PartialEq for SkillCategory {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (SkillCategory::CodeGeneration, SkillCategory::CodeGeneration) => true,
-            (SkillCategory::CodeReview, SkillCategory::CodeReview) => true,
-            (SkillCategory::Testing, SkillCategory::Testing) => true,
-            (SkillCategory::Documentation, SkillCategory::Documentation) => true,
-            (SkillCategory::Deployment, SkillCategory::Deployment) => true,
-            (SkillCategory::Analysis, SkillCategory::Analysis) => true,
-            (SkillCategory::Custom(a), SkillCategory::Custom(b)) => a == b,
-            _ => false,
-        }
+        self.as_str() == other.as_str()
     }
 }
 
@@ -75,101 +86,20 @@ impl SkillManager {
     }
 
     fn load_default_skills(&mut self) {
-        let default_skills = vec![
-            Skill {
-                id: "opencode".to_string(),
-                name: "OpenCode".to_string(),
-                description: "调用 OpenCode 进行代码生成和修改".to_string(),
-                category: SkillCategory::CodeGeneration,
-                command: "opencode".to_string(),
-                args: vec![
-                    SkillArg {
-                        name: "task".to_string(),
-                        required: true,
-                        default: None,
-                        description: "任务描述".to_string(),
-                    },
-                    SkillArg {
-                        name: "path".to_string(),
-                        required: false,
-                        default: Some(".".to_string()),
-                        description: "工作目录".to_string(),
-                    },
-                ],
-                env: HashMap::new(),
-                working_dir: None,
-            },
-            Skill {
-                id: "shell".to_string(),
-                name: "Shell".to_string(),
-                description: "执行终端命令".to_string(),
-                category: SkillCategory::Custom("system".to_string()),
-                command: "sh".to_string(),
-                args: vec![
-                    SkillArg {
-                        name: "command".to_string(),
-                        required: true,
-                        default: None,
-                        description: "要执行的命令".to_string(),
-                    },
-                ],
-                env: HashMap::new(),
-                working_dir: None,
-            },
-            Skill {
-                id: "git_status".to_string(),
-                name: "GitStatus".to_string(),
-                description: "查看 Git 状态".to_string(),
-                category: SkillCategory::Custom("system".to_string()),
-                command: "git".to_string(),
-                args: vec![],
-                env: HashMap::new(),
-                working_dir: None,
-            },
-            Skill {
-                id: "file_read".to_string(),
-                name: "FileRead".to_string(),
-                description: "读取文件内容".to_string(),
-                category: SkillCategory::Custom("system".to_string()),
-                command: "cat".to_string(),
-                args: vec![
-                    SkillArg {
-                        name: "path".to_string(),
-                        required: true,
-                        default: None,
-                        description: "文件路径".to_string(),
-                    },
-                ],
-                env: HashMap::new(),
-                working_dir: None,
-            },
-            Skill {
-                id: "file_write".to_string(),
-                name: "FileWrite".to_string(),
-                description: "写入文件内容".to_string(),
-                category: SkillCategory::Custom("system".to_string()),
-                command: "tee".to_string(),
-                args: vec![
-                    SkillArg {
-                        name: "path".to_string(),
-                        required: true,
-                        default: None,
-                        description: "文件路径".to_string(),
-                    },
-                    SkillArg {
-                        name: "content".to_string(),
-                        required: true,
-                        default: None,
-                        description: "文件内容".to_string(),
-                    },
-                ],
-                env: HashMap::new(),
-                working_dir: None,
-            },
+        let possible_paths = vec![
+            self.skills_dir.join("default.json"),
+            PathBuf::from("skills/default.json"),
         ];
 
-        for skill in default_skills {
-            self.skills.insert(skill.id.clone(), skill);
+        for path in &possible_paths {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                if let Ok(skills) = serde_json::from_str::<Vec<Skill>>(&content) {
+                    for skill in skills {
+                        self.skills.insert(skill.id.clone(), skill);
+                    }
+                    return;
+                }
+            }
         }
     }
 

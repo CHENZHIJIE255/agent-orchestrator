@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation},
     Frame,
 };
 use std::sync::Arc;
@@ -77,17 +77,15 @@ impl TUI {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(4),
-                Constraint::Min(0),
                 Constraint::Length(3),
+                Constraint::Min(0),
                 Constraint::Length(3),
             ])
             .split(f.area());
 
         self.render_header(f, chunks[0]);
-        self.render_main_panels(f, chunks[1]);
-        self.render_approval_panel(f, chunks[2]);
-        self.render_input_panel(f, chunks[3]);
+        self.render_logs(f, chunks[1]);
+        self.render_input(f, chunks[2]);
     }
 
     fn render_header(&self, f: &mut Frame, area: ratatui::layout::Rect) {
@@ -95,59 +93,29 @@ impl TUI {
         let project = state.current_project.as_deref().unwrap_or("No project");
         let status = format!("{:?}", state.task_status);
 
-        let max_width = area.width.saturating_sub(10) as usize;
-        let message = if state.message.len() > max_width {
-            &state.message[..max_width]
-        } else {
-            state.message.as_str()
-        };
-
-        let header_text = Line::from(vec![
-            Span::raw("AgentOrchestrator | "),
-            Span::styled(project, Style::default().fg(Color::Cyan)),
-            Span::raw(" | Status: "),
-            Span::styled(status, Style::default().fg(Color::Green)),
+        let text = Line::from(vec![
+            Span::raw("["),
+            Span::styled("Agent", Style::default().fg(Color::Cyan)),
+            Span::raw("] "),
+            Span::styled(project, Style::default().fg(Color::Green)),
+            Span::raw(" | "),
+            Span::styled(status, Style::default().fg(Color::Yellow)),
         ]);
 
-        let block = Block::default().borders(Borders::ALL).title(" Status ");
-
-        let paragraph = Paragraph::new(header_text)
-            .block(block)
-            .style(Style::default().fg(Color::White));
-
-        f.render_widget(paragraph, area);
-
-        if !message.is_empty() {
-            let msg_area = ratatui::layout::Rect::new(
-                area.x + 1,
-                area.y + 1,
-                area.x + area.width - 2,
-                area.y + 2,
-            );
-            let msg_text = Line::from(Span::styled(message, Style::default().fg(Color::Yellow)));
-            let msg_para = Paragraph::new(msg_text);
-            f.render_widget(msg_para, msg_area);
-        }
+        f.render_widget(
+            Paragraph::new(text).style(Style::default().fg(Color::White)),
+            area,
+        );
     }
 
-    fn render_main_panels(&self, f: &mut Frame, area: ratatui::layout::Rect) {
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-            .split(area);
-
-        self.render_log_panel(f, chunks[0]);
-        self.render_alert_panel(f, chunks[1]);
-    }
-
-    fn render_log_panel(&self, f: &mut Frame, area: ratatui::layout::Rect) {
+    fn render_logs(&self, f: &mut Frame, area: ratatui::layout::Rect) {
         let state = self.state.read();
 
-        let items: Vec<ListItem> = state
+        let log_items: Vec<ListItem> = state
             .logs
             .iter()
             .rev()
-            .take(50)
+            .take(30)
             .map(|log| {
                 let color = match log.level {
                     crate::logger::LogLevel::Info => Color::White,
@@ -157,7 +125,7 @@ impl TUI {
                 };
 
                 let content = format!(
-                    "[{}] [{}] {}",
+                    "[{}] {}: {}",
                     log.timestamp.format("%H:%M:%S"),
                     log.agent,
                     log.message
@@ -167,81 +135,25 @@ impl TUI {
             })
             .collect();
 
-        let list = List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(i18n::t("logs.title")),
-        );
-
+        let list = List::new(log_items);
         f.render_widget(list, area);
+
+        if !state.message.is_empty() {
+            let msg_y = area.y + area.height.saturating_sub(1);
+            let msg_area = ratatui::layout::Rect::new(area.x, msg_y, area.width, 1);
+            let msg_text = Line::from(vec![
+                Span::styled("> ", Style::default().fg(Color::Cyan)),
+                Span::styled(&state.message, Style::default().fg(Color::White)),
+            ]);
+            f.render_widget(Paragraph::new(msg_text), msg_area);
+        }
     }
 
-    fn render_alert_panel(&self, f: &mut Frame, area: ratatui::layout::Rect) {
+    fn render_input(&self, f: &mut Frame, area: ratatui::layout::Rect) {
         let state = self.state.read();
-
-        let items: Vec<ListItem> = state
-            .error_logs
-            .iter()
-            .rev()
-            .take(20)
-            .map(|log| {
-                let (prefix, color) = match log.level {
-                    crate::logger::LogLevel::Warning => ("⚠️", Color::Yellow),
-                    crate::logger::LogLevel::Error => ("❌", Color::Red),
-                    _ => ("ℹ️", Color::White),
-                };
-
-                let content = format!("{} [{}] {}", prefix, log.agent, log.message);
-                ListItem::new(Span::styled(content, Style::default().fg(color)))
-            })
-            .collect();
-
-        let list = List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(i18n::t("alerts.title")),
-        );
-
-        f.render_widget(list, area);
-    }
-
-    fn render_approval_panel(&self, f: &mut Frame, area: ratatui::layout::Rect) {
-        let state = self.state.read();
-
-        let approval_text = if state.pending_approvals.is_empty() {
-            Line::from(i18n::t("approval.no_pending"))
-        } else {
-            let approval = &state.pending_approvals[0];
-            Line::from(vec![
-                Span::raw("Pending: "),
-                Span::styled(&approval.agent, Style::default().fg(Color::Yellow)),
-                Span::raw(" - "),
-                Span::raw(&approval.description),
-                Span::raw(" | [Approve] [Reject] [Auto] "),
-            ])
-        };
-
-        let block = Block::default().borders(Borders::ALL).title(" Approvals ");
-
-        let paragraph = Paragraph::new(approval_text)
-            .block(block)
-            .style(Style::default().fg(Color::White));
-
-        f.render_widget(paragraph, area);
-    }
-
-    fn render_input_panel(&self, f: &mut Frame, area: ratatui::layout::Rect) {
-        let state = self.state.read();
-
-        let input_text = format!("> {}", state.input_buffer);
-
-        let block = Block::default().borders(Borders::ALL).title(" Input ");
-
-        let paragraph = Paragraph::new(input_text)
-            .block(block)
-            .style(Style::default().fg(Color::White));
-
-        f.render_widget(paragraph, area);
+        let input = format!("> {}", state.input_buffer);
+        let text = Line::from(Span::styled(input, Style::default().fg(Color::Green)));
+        f.render_widget(Paragraph::new(text), area);
     }
 
     pub fn update_logs(&self) {
